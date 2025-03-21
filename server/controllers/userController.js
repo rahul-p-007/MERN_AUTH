@@ -14,6 +14,16 @@ export const register = catchAsyncError(async (req, res, next) => {
             return next(new ErrorHandler("All fields are required", 400));
         }
 
+        function validatePhoneNumber(phone) {
+            const phoneRegex = /^\+91\d{10}$/;  // Matches +91 followed by 10 digits
+            return phoneRegex.test(phone);
+        }
+        
+        if (!validatePhoneNumber(phone)) {
+            return next(new ErrorHandler("Invalid phone number.", 400));
+        }
+        
+
         const existingUser = await User.findOne({
             $or: [
                 { email, accountVerified: true },
@@ -60,18 +70,19 @@ async function sendVerificationCode(verificationMethod, verificationCode, email,
             });
 
         } else if (verificationMethod === "phone") {
-            const verificationCodeWithSpace = verificationCode.toString().split("").join(" ");
+            const verificationCodeWithSpace = verificationCode
+              .toString()
+              .split("")
+              .join(" ");
             await client.calls.create({
-                twiml: `<Response><Say>Your verification code is ${verificationCodeWithSpace}. Your verification code is ${verificationCodeWithSpace}.</Say></Response>`,
-                from: process.env.TWILIO_PHONE_NO,
-                to: phone
+              twiml: `<Response><Say>Your verification code is ${verificationCodeWithSpace}. Your verification code is ${verificationCodeWithSpace}.</Say></Response>`,
+              from: process.env.TWILIO_PHONE_NO,
+              to: phone,
             });
-
-            return res.status(200).json({
-                success: true,
-                message: `OTP Sent`
+            res.status(200).json({
+              success: true,
+              message: `OTP sent.`,
             });
-
         } else {
             return res.status(400).json({
                 success: false,
@@ -107,3 +118,83 @@ function generateEmailTemplate(name, verificationCode) {
         </div>
     </div>`;
 }
+export const verifyOTP = catchAsyncError(async(req,res,next)=>{
+    const {email,otp,phone} = req.body;
+
+    function validatePhoneNumber(phone) {
+        const phoneRegex = /^\+91\d{10}$/;  // Matches +91 followed by 10 digits
+        return phoneRegex.test(phone);
+    }
+    
+    if (!validatePhoneNumber(phone)) {
+        return next(new ErrorHandler("Invalid phone number.", 400));
+    }
+    
+    try {
+        const userAllEntries = await User.find({
+            $or:[
+                {email,accountVerified : false},{
+                    phone,accountVerified:false,
+                }
+            ]
+        }).sort({createdAt: -1});
+
+
+
+        if(!userAllEntries){
+            return next(new ErrorHandler("User not found",404))
+
+           
+        }
+
+
+        // if user found
+
+        let user ;
+        if(userAllEntries.length > 1){
+            user = userAllEntries[0];
+
+
+           await User.deleteMany({
+            _id: { $ne :user._id},
+            $or: [
+            {
+                phone,accountVerified :false
+            },
+            {
+                email,accountVerified :false
+            }
+            ]
+           })
+        }else{
+            user = userAllEntries[0];
+        }
+// converting otp to number
+        if(user.verificationCode !== Number(otp)){
+           return next(new ErrorHandler("Invalid OTP",400))
+        }
+        // Checking the otp validate or not
+        const currentTime = Date.now();
+        const verificationCodeExpire= new Date(user.verificationCodeExpir).getTime();
+        console.log(currentTime)
+        console.log(verificationCodeExpire)
+
+        if(currentTime > verificationCodeExpire){
+            return next(new ErrorHandler("OTP Expired",400))
+        }
+
+
+        user.accountVerified = true
+        user.verificationCode = null
+        user.verificationCodeExpir = null
+
+        await user.save({validateModifiedOnly : true})
+
+
+
+        sendToken();
+
+    } catch (error) {
+        
+    }
+})
